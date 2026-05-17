@@ -1,0 +1,139 @@
+name: CI – Unit Tests & Lint
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Lint ──────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install ruff
+        run: pip install ruff>=0.4
+
+      - name: Run ruff
+        run: ruff check services/ shared/ tests/ --output-format=github
+
+  # ── Unit tests ────────────────────────────────────────────────────────────
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-22.04
+    needs: lint
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Python setup ──────────────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      # ── System deps needed for dlib (stub compile) / sounddevice / cv2 ────
+      - name: Install system libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends             libgl1 libglib2.0-0             portaudio19-dev             libopenblas-dev
+
+      # ── Python deps ───────────────────────────────────────────────────────
+      - name: Install test deps
+        run: pip install -r tests/requirements-test.txt
+
+      # Install lightweight stubs for heavy ML libs so imports work in tests
+      - name: Install service stubs
+        run: |
+          pip install             opencv-python-headless             sounddevice             pyyaml             fastapi             uvicorn
+
+      # face_recognition and faster-whisper are heavy; mock them in tests,
+      # but we still need the packages importable (stubs only).
+      - name: Install face-recognition stub
+        run: |
+          pip install --no-deps face-recognition || true
+          # fallback: create minimal stub so imports don't fail in CI
+          python - <<'PY'
+          import importlib.util, sys
+          if importlib.util.find_spec("face_recognition") is None:
+              import types, os
+              fr = types.ModuleType("face_recognition")
+              fr.face_locations = lambda *a, **kw: []
+              fr.face_encodings = lambda *a, **kw: []
+              fr.face_distance  = lambda *a, **kw: [1.0]
+              fr.load_image_file= lambda p: None
+              sys.modules["face_recognition"] = fr
+              print("Created face_recognition stub")
+          PY
+
+      - name: Install ultralytics stub
+        run: |
+          python - <<'PY'
+          import importlib.util, sys, types
+          if importlib.util.find_spec("ultralytics") is None:
+              ul = types.ModuleType("ultralytics")
+              class FakeYOLO:
+                  def __init__(self, *a, **kw): pass
+                  def __call__(self, *a, **kw): return []
+              ul.YOLO = FakeYOLO
+              sys.modules["ultralytics"] = ul
+              print("Created ultralytics stub")
+          PY
+
+      # ── Run tests ─────────────────────────────────────────────────────────
+      - name: Run pytest
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          pytest tests/             -v             --tb=short             --cov=services             --cov=shared             --cov-report=term-missing             --cov-report=xml:coverage.xml             -p no:cacheprovider
+
+      # ── Coverage upload ───────────────────────────────────────────────────
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+
+      # ── Upload test results as artifact ───────────────────────────────────
+      - name: Upload coverage XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python-version }}
+          path: coverage.xml
+
+  # ── Docker build smoke test ───────────────────────────────────────────────
+  docker-build:
+    name: Docker build smoke test
+    runs-on: ubuntu-22.04
+    needs: test
+    strategy:
+      matrix:
+        service: [face_service, vision_service, automation_service, web_ui]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.service }} image
+        run: |
+          docker build             --no-cache             --build-arg BUILDKIT_INLINE_CACHE=1             -t ha_${{ matrix.service }}:ci             ./services/${{ matrix.service }}
+        env:
+          DOCKER_BUILDKIT: "1"
