@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Kotiassistentti</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#111;color:#ddd;padding:1.5rem}
+h1{color:#4f98a3;font-size:1.3rem;margin-bottom:1.2rem}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem}
+.card{background:#1c1b19;border-radius:10px;padding:1rem 1.2rem}
+.card h2{color:#4f98a3;font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.6rem}
+.badge{display:inline-block;background:#01696f;color:#fff;padding:.2rem .6rem;border-radius:999px;font-size:.82rem;margin:.15rem}
+.empty{color:#555;font-style:italic;font-size:.88rem}
+#footer{color:#444;font-size:.72rem;margin-top:1.2rem}
+.dot{width:8px;height:8px;border-radius:50%;background:#4f98a3;display:inline-block;margin-right:.4rem;animation:p 2s infinite}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
+</style>
+</head>
+<body>
+<h1><span class="dot"></span>Kotiassistentti – Status</h1>
+<div class="grid">
+  <div class="card"><h2>Paikalla</h2><div id="persons"><span class="empty">Ei havaittu</span></div></div>
+  <div class="card"><h2>Tiskipöytä</h2><div id="dishes"><span class="empty">Tyhjä</span></div></div>
+  <div class="card"><h2>Viimeisin komento</h2><div id="cmd"><span class="empty">–</span></div></div>
+  <div class="card"><h2>Viimeisin kasvohavainto</h2><div id="face"><span class="empty">–</span></div></div>
+</div>
+<div id="footer">Yhdistetään…</div>
+<script>
+const ws=new WebSocket(`ws://${location.host}/ws`);
+ws.onopen=()=>document.getElementById("footer").textContent="● Yhdistetty";
+ws.onerror=()=>document.getElementById("footer").textContent="✗ Yhteysongelma";
+ws.onmessage=ev=>{
+  const s=JSON.parse(ev.data);
+  document.getElementById("persons").innerHTML=s.persons_present?.length
+    ?s.persons_present.map(n=>`<span class="badge">${n}</span>`).join("")
+    :"<span class='empty'>Ei havaittu</span>";
+  const d=s.dish_status||{};
+  document.getElementById("dishes").innerHTML=Object.keys(d).length
+    ?Object.entries(d).map(([k,v])=>`<span class="badge">${k} ${v}min</span>`).join("")
+    :"<span class='empty'>Tyhjä</span>";
+  document.getElementById("cmd").textContent=s.last_command?.text||"–";
+  const lf=s.last_face;
+  document.getElementById("face").innerHTML=lf?`${lf.name} <small>(${(lf.confidence*100).toFixed(0)}%)</small>`:"–";
+  document.getElementById("footer").textContent=`● Päivitetty ${new Date().toLocaleTimeString("fi-FI")}`;
+};
+</script>
+</body></html>

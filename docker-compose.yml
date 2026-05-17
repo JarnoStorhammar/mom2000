@@ -1,0 +1,93 @@
+version: "3.9"
+
+services:
+  mqtt:
+    image: eclipse-mosquitto:2.0
+    container_name: ha_mqtt
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mqtt_data:/mosquitto/data
+      - mqtt_log:/mosquitto/log
+    networks: [ha_net]
+
+  face_service:
+    build:
+      context: .
+      dockerfile: services/face_service/Dockerfile
+    container_name: ha_face
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./shared:/app/shared
+      - ./config:/app/config
+    devices:
+      - /dev/video0:/dev/video0
+    depends_on: [mqtt]
+    networks: [ha_net]
+
+  vision_service:
+    build:
+      context: .
+      dockerfile: services/vision_service/Dockerfile
+    container_name: ha_vision
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./shared:/app/shared
+      - ./config:/app/config
+    depends_on: [mqtt]
+    networks: [ha_net]
+
+  voice_service:
+    build:
+      context: .
+      dockerfile: services/voice_service/Dockerfile
+    container_name: ha_voice
+    restart: unless-stopped
+    env_file: .env
+    network_mode: host
+    volumes:
+      - /run/user/1000/pulse:/run/user/1000/pulse
+      - ./shared:/app/shared
+      - ./config:/app/config
+    devices:
+      - /dev/snd:/dev/snd
+    group_add: [audio]
+
+  automation_service:
+    build:
+      context: .
+      dockerfile: services/automation_service/Dockerfile
+    container_name: ha_automation
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./shared:/app/shared
+      - ./config:/app/config
+    depends_on: [mqtt]
+    networks: [ha_net]
+
+  web_ui:
+    build:
+      context: .
+      dockerfile: services/web_ui/Dockerfile
+    container_name: ha_webui
+    restart: unless-stopped
+    ports: ["8080:8080"]
+    env_file: .env
+    volumes:
+      - ./config:/app/config
+    depends_on: [mqtt]
+    networks: [ha_net]
+
+volumes:
+  mqtt_data:
+  mqtt_log:
+
+networks:
+  ha_net:
+    driver: bridge
