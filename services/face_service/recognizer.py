@@ -1,43 +1,61 @@
+"""Face recognition using dlib via face_recognition library."""
 from __future__ import annotations
-import logging, pickle
+
+import logging
+import pickle
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
-import face_recognition, numpy as np
+
+import face_recognition
+import numpy as np
 
 logger = logging.getLogger(__name__)
+EMBEDDINGS_FILE = "embeddings.pkl"
+
 
 @dataclass
 class RecognitionResult:
-    name: str; confidence: float; location: tuple
+    name: str
+    confidence: float
+    location: tuple[int, int, int, int]
+
 
 class FaceRecognizer:
-    def __init__(self, embeddings_path: str, threshold: float = 0.55):
-        self.dir = Path(embeddings_path)
-        self.threshold = threshold
-        self.encodings: list = []; self.names: list[str] = []
-        self._load()
+    def __init__(self, embeddings_path: str, confidence_threshold: float = 0.55) -> None:
+        self.embeddings_dir = Path(embeddings_path)
+        self.threshold = confidence_threshold
+        self.known_encodings: list[np.ndarray] = []
+        self.known_names: list[str] = []
+        self._load_embeddings()
 
-    def _load(self):
-        pkl = self.dir / "embeddings.pkl"
+    def _load_embeddings(self) -> None:
+        pkl = self.embeddings_dir / EMBEDDINGS_FILE
         if pkl.exists():
-            with open(pkl,"rb") as f: d = pickle.load(f)
-            self.encodings = d.get("encodings",[]); self.names = d.get("names",[])
-            logger.info("Loaded %d embeddings: %s", len(self.names), sorted(set(self.names)))
+            with open(pkl, "rb") as f:
+                data = pickle.load(f)
+            self.known_encodings = data.get("encodings", [])
+            self.known_names = data.get("names", [])
+            logger.info("Loaded %d face embeddings", len(self.known_names))
         else:
-            logger.warning("No embeddings at %s – run enroll_face.py", pkl)
+            logger.warning("No embeddings at %s – run enroll_face.py first", pkl)
 
-    def reload(self): self.encodings=[]; self.names=[]; self._load()
+    def reload(self) -> None:
+        self.known_encodings = []
+        self.known_names = []
+        self._load_embeddings()
 
-    def recognize(self, frame_rgb) -> list[RecognitionResult]:
-        if not self.encodings: return []
-        locs = face_recognition.face_locations(frame_rgb, model="hog")
-        if not locs: return []
-        encs = face_recognition.face_encodings(frame_rgb, locs)
-        out = []
-        for enc, loc in zip(encs, locs):
-            dists = face_recognition.face_distance(self.encodings, enc)
-            i = int(np.argmin(dists)); conf = float(1.0 - dists[i])
-            name = self.names[i] if conf >= self.threshold else "unknown"
-            out.append(RecognitionResult(name=name, confidence=conf, location=loc))
-        return out
+    def recognize(self, frame_rgb: np.ndarray) -> list[RecognitionResult]:
+        if not self.known_encodings:
+            return []
+        locations = face_recognition.face_locations(frame_rgb, model="hog")
+        if not locations:
+            return []
+        encodings = face_recognition.face_encodings(frame_rgb, locations)
+        results: list[RecognitionResult] = []
+        for encoding, location in zip(encodings, locations):
+            distances = face_recognition.face_distance(self.known_encodings, encoding)
+            best_idx = int(np.argmin(distances))
+            confidence = 1.0 - float(distances[best_idx])
+            name = self.known_names[best_idx] if confidence >= self.threshold else "unknown"
+            results.append(RecognitionResult(name=name, confidence=confidence, location=location))
+        return results

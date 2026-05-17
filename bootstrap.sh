@@ -1,33 +1,62 @@
 #!/usr/bin/env bash
-set -e
-G="\033[0;32m"; Y="\033[1;33m"; R="\033[0;31m"; N="\033[0m"
-ok()  { echo -e "${G}✓ $*${N}"; }
-warn(){ echo -e "${Y}⚠ $*${N}"; }
-die() { echo -e "${R}✗ $*${N}"; exit 1; }
+# Bootstrap: check deps, set up dirs, download models, build containers
+set -euo pipefail
 
-echo -e "${G}=== Home Assistant MVP Bootstrap ===${N}"
-for cmd in docker pactl curl python3; do
-  command -v "$cmd" &>/dev/null && ok "$cmd found" || die "Missing: $cmd"
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
+ok()   { echo -e "${GREEN}✓ $*${NC}"; }
+warn() { echo -e "${YELLOW}⚠ $*${NC}"; }
+fail() { echo -e "${RED}✗ $*${NC}"; exit 1; }
+
+echo -e "${GREEN}=== Home Assistant MVP Bootstrap ===${NC}"
+echo ""
+
+# 1. Required tools
+for cmd in docker python3 pip3 curl pactl; do
+  command -v "$cmd" &>/dev/null && ok "$cmd found" || fail "Missing: $cmd – install it first"
 done
-docker compose version &>/dev/null || docker-compose version &>/dev/null || die "Docker Compose not found"
 
-mkdir -p shared/models shared/embeddings config
-ok "Directories ready"
+# 2. Directory structure
+mkdir -p shared/models shared/embeddings shared/models/piper config
+ok "Directory structure created"
 
-if [ ! -f .env ]; then cp .env.example .env; warn "Created .env – edit AUDIO_OUTPUT_SINK!"; else ok ".env exists"; fi
+# 3. .env
+if [ ! -f .env ]; then
+  cp .env.example .env
+  warn "Created .env from .env.example – EDIT IT before starting!"
+else
+  ok ".env exists"
+fi
 
-echo -e "\nPulseAudio sinks (copy BT sink name → AUDIO_OUTPUT_SINK in .env):"
-pactl list sinks short 2>/dev/null || echo "  (pactl unavailable – start PulseAudio)"
+# 4. Bluetooth sink hint
+echo ""
+echo "Available PulseAudio sinks (your BT speaker should be listed):"
+pactl list sinks short 2>/dev/null || warn "PulseAudio not available yet"
+echo ""
+warn "Copy BT sink name → set AUDIO_OUTPUT_SINK in .env"
 
-echo -e "\nDownloading ML models..."
+# 5. Download ML models (requires ultralytics + curl)
+echo ""
+echo "==> Downloading ML models..."
+pip3 install -q ultralytics 2>/dev/null || true
 bash scripts/download_models.sh
+ok "ML models downloaded"
 
-echo -e "\nBuilding Docker images (first build ~15-20 min)..."
-docker compose build 2>/dev/null || docker-compose build
+# 6. Build Docker images
+echo ""
+echo "==> Building Docker images (first run takes 10-20 min)..."
+docker compose build
+ok "Docker images built"
 
-echo -e "\n${G}=== Done! ===${N}"
-echo "  1. Edit .env            nano .env"
-echo "  2. Enroll faces         python3 scripts/enroll_face.py --name 'Nimi' --webcam"
-echo "  3. Start                docker compose up -d"
-echo "  4. Logs                 docker compose logs -f"
-echo "  5. Dashboard            http://localhost:8080"
+echo ""
+echo -e "${GREEN}=== Bootstrap complete! ===${NC}"
+echo ""
+echo "Next steps:"
+echo "  1.  Edit .env  (AUDIO_OUTPUT_SINK, camera settings)"
+echo "  2.  Enroll faces:  python3 scripts/enroll_face.py --name 'Jarno' --webcam"
+echo "  3.  Start:         docker compose up -d"
+echo "  4.  Logs:          docker compose logs -f"
+echo "  5.  Web UI:        http://localhost:8080"
+echo ""
+echo "Test scripts (run on host, not in container):"
+echo "  python3 scripts/test_tts.py"
+echo "  python3 scripts/test_camera.py"

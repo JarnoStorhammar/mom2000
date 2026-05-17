@@ -1,153 +1,116 @@
-# 🏠 Home Assistant MVP
+# Home Assistant MVP – Paikallinen kotiassistentti
 
-Offline-toimiva kotiassistentti — kasvojentunnistus, puhekomennot,
-astiavalvonta ja Bluetooth-kaiutin. Ei pilvipalveluita, ei maksullisia APIeja.
+Täysin offline-toimiva kotiassistentti Dockerissa.  
+Kasvojentunnistus · Astiavalvonta · Puheentunnistus · TTS · MQTT
 
-**Stack:** Python 3.11 · Docker Compose · MQTT · face-recognition (dlib) · YOLOv8n · faster-whisper · Piper TTS
+## Arkkitehtuuri
 
----
+```
+Camera → face_service  → MQTT → automation_service → TTS (voice_service)
+       → vision_service → MQTT ↗
+Mic    → voice_service  → MQTT ↗
+                               ↘ web_ui (http://localhost:8080)
+```
 
-## Esivalmistelut (host-koneella)
+## Pikaohje
 
-### 1. Docker + PulseAudio + Bluetooth
-
-\`\`\`bash
-sudo apt install docker.io docker-compose-plugin
-sudo apt install pulseaudio pulseaudio-module-bluetooth
-sudo usermod -aG docker $USER
-\`\`\`
-
-### 2. Parinna Bluetooth-kaiutin
-
-\`\`\`bash
-bluetoothctl
-> scan on
-> connect XX:XX:XX:XX:XX:XX
-> trust XX:XX:XX:XX:XX:XX
-> exit
-
-# Etsi sink-nimi → kopioi .env:iin AUDIO_OUTPUT_SINK-kohtaan
-pactl list sinks short
-\`\`\`
-
----
-
-## Asennus
-
-### 3. Kloonaa ja konfiguroi
-
-\`\`\`bash
-git clone https://github.com/YOUR/home-assistant-mvp.git
-cd home-assistant-mvp
-cp .env.example .env
-nano .env
-\`\`\`
-
-Tärkeimmät .env-asetukset:
-
-| Asetus | Esimerkki | Selitys |
-|---|---|---|
-| `AUDIO_OUTPUT_SINK` | `bluez_sink.XX_XX.a2dp_sink` | BT-kaiuttimen PA-sink |
-| `CAMERA_SOURCE` | `webcam` tai `rtsp` | Kameran tyyppi |
-| `RTSP_URL` | `rtsp://admin:pass@192.168.1.100:554/stream` | IP-kamera URL |
-| `WHISPER_MODEL` | `small` | tiny/base/small/medium |
-| `DISH_ROI` | `0.1,0.2,0.9,0.8` | Valvonta-alue kuvasta |
-| `DISH_TIMEOUT_MINUTES` | `15` | Minuuttia ennen muistutusta |
-| `QUIET_HOURS_START` | `22` | Hiljainen tila alkaa |
-| `QUIET_HOURS_END` | `7` | Hiljainen tila päättyy |
-
-### 4. Bootstrap (lataa mallit + buildaa Docker-kuvat)
-
-\`\`\`bash
+```bash
+# 1. Alusta
 bash bootstrap.sh
-\`\`\`
 
-> ⚠️ Ensimmäinen build kestää 15–20 min — dlib käännetään lähdekoodista.
+# 2. Muokkaa .env (BT-sink, kamera)
+nano .env
 
-### 5. Rekisteröi kasvot
+# 3. Rekisteröi kasvot
+python3 scripts/enroll_face.py --name "Jarno" --webcam
 
-\`\`\`bash
-# Interaktiivinen webkam-tallennus (ota kuvia eri valaistuksissa!)
+# 4. Käynnistä
+docker compose up -d
+
+# 5. Seuraa lokeja
+docker compose logs -f
+
+# Web UI
+open http://localhost:8080
+```
+
+## Rakenne
+
+| Palvelu | Vastuu |
+|---|---|
+| `face_service` | USB/RTSP-kamera, dlib-kasvojentunnistus, MQTT |
+| `vision_service` | YOLOv8n astiavalvonta, ROI, timer-logiikka |
+| `voice_service` | faster-whisper STT + Piper TTS, BT-audio |
+| `automation_service` | Sääntömoottori, nalkutuslogiikka, cooldown |
+| `web_ui` | FastAPI + WebSocket live-dashboard |
+| `mqtt` | Mosquitto event bus |
+
+## MQTT-topicit
+
+| Topic | Suunta | Payload |
+|---|---|---|
+| `ha/face/detected` | face_service → | `{"name","confidence","timestamp"}` |
+| `ha/presence/current` | face_service → | `["Jarno"]` (retained) |
+| `ha/dish/alert` | vision_service → | `{"items","minutes","timestamp"}` |
+| `ha/dish/status` | vision_service → | `{"plate": 3.2, ...}` (retained) |
+| `ha/voice/command` | voice_service → | `{"text": "laita valot päälle"}` |
+| `ha/tts/speak` | → voice_service | `{"text": "Hei Jarno!"}` |
+| `ha/light/control` | → ulkoinen | `{"action": "on"}` |
+
+## Puhekäskyt (suomi)
+
+| Käsky | Toiminto |
+|---|---|
+| "laita valot päälle" | `ha/light/control` on |
+| "sammuta valot" | `ha/light/control` off |
+| "mitä näkyy tiskipöydällä" | Kertoo havaitut astiat |
+| "ketä paikalla on" | Kertoo tunnistetut henkilöt |
+
+## Kasvojen rekisteröinti
+
+```bash
+# Webcam (interaktiivinen)
 python3 scripts/enroll_face.py --name "Jarno" --webcam --count 10
 
-# Tai valmiista kuvista
+# Olemassa olevista kuvista
 python3 scripts/enroll_face.py --name "Jarno" --images ~/kuvat/jarno/
 
-# Tarkista rekisteröidyt henkilöt
+# Listaa rekisteröidyt
 python3 scripts/enroll_face.py --list
-\`\`\`
 
-### 6. Käynnistä
+# Poista henkilö
+python3 scripts/enroll_face.py --remove "Jarno"
+```
 
-\`\`\`bash
-docker compose up -d
-docker compose logs -f
-# Dashboard: http://localhost:8080
-\`\`\`
+Ota kuvia **eri valaistuksissa** (päivänvalo + keinivalo + hämärä) parhaan tarkkuuden saamiseksi.
 
----
+## Astiavalvonnan säätö
 
-## Testaus
+Muokkaa `.env`:
+```
+DISH_ROI=0.1,0.2,0.9,0.8          # x1,y1,x2,y2 (0-1, kuvan suhteelliset koordinaatit)
+DISH_TIMEOUT_MINUTES=15            # kuinka kauan astia saa olla
+DISH_COOLDOWN_MINUTES=30           # väli muistutusten välillä
+QUIET_HOURS_START=22               # hiljainen alku
+QUIET_HOURS_END=7                  # hiljainen loppu
+```
 
-\`\`\`bash
-# Kameratesti
-docker exec ha_face python3 -c "
-import cv2; c=cv2.VideoCapture(0); r,f=c.read()
-print('OK' if r else 'FAIL', f.shape if r else '')
-"
+## Rautasuositus
 
-# TTS-testi (pitäisi kuulua BT-kaiuttimesta)
-mosquitto_pub -h localhost -t ha/tts/speak \
-  -m '{"text":"Hei Jarno, testi toimii."}'
+| | Laite | Muisti | Suorituskyky |
+|---|---|---|---|
+| Budjetti | Raspberry Pi 5 8GB | 8 GB | Whisper tiny, toimii |
+| **Suositus** | Intel NUC N100/i3 | 16 GB | Whisper small, hyvä |
+| Tehokas | AMD Ryzen mini-PC | 32 GB | Whisper medium, nopea |
 
-# Seuraa kaikkia MQTT-tapahtumia
-docker exec ha_mqtt mosquitto_sub -h localhost -t 'ha/#' -v
+## Laajennukset (Phase 5+)
 
-# Rakenna yksittäinen palvelu uudelleen
-docker compose build face_service && docker compose up -d face_service
-\`\`\`
+- Wake word: lisää `openwakeword`, vaihda `LISTEN_MODE=wake_word`
+- Home Assistant: yhdistä MQTT-sillaksi, ohjaa Zigbee-valoja
+- GPU-kiihdytys: Ultralytics OpenVINO-export Intel iGPU:lle
+- LLM-komennot: Ollama + llama3.2 parempi komentojen tulkinta
+- Toinen kamera eteiseen: kasvojentunnistus kotiin tullessa
 
----
+## Lisenssi
 
-## Puhekäskyt
-
-| Sano | Toiminto |
-|---|---|
-| "laita valot päälle" | Julkaisee `ha/light/control {"action":"on"}` |
-| "sammuta valot" | Julkaisee `ha/light/control {"action":"off"}` |
-| "mitä näkyy tiskipöydällä" | Puhuttu vastaus astioista |
-| "ketä paikalla on" | Puhuttu vastaus läsnäolijoista |
-
----
-
-## Vianmääritys
-
-**BT-kaiutin ei kuulu:**
-\`\`\`bash
-pactl list sinks short          # tarkista sink-nimi
-# Päivitä AUDIO_OUTPUT_SINK .env:iin
-docker compose restart voice_service
-\`\`\`
-
-**Kasvoja ei tunnisteta:**
-\`\`\`bash
-# Laske kynnystä tai rekisteröi lisää kuvia
-FACE_CONFIDENCE_THRESHOLD=0.45
-python3 scripts/enroll_face.py --name "Jarno" --webcam --count 5
-\`\`\`
-
-**YOLO-malli puuttuu:**
-\`\`\`bash
-bash scripts/download_models.sh
-docker compose restart vision_service
-\`\`\`
-
----
-
-## Jatkokehitys
-
-- Wake word (`openwakeword`)
-- Home Assistant MQTT-silta Zigbee-valoille
-- Intel OpenVINO-export ~3× nopeampi YOLO iGPU:lla
-- IR-kamera pimeän kasvojentunnistukseen
-- Ollama + llama3.2 älykkäämpään komennontulkintaan
+MIT

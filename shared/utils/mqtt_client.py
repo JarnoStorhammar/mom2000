@@ -1,44 +1,64 @@
-"""MQTT client with auto-reconnect."""
+"""Shared MQTT client with auto-reconnect."""
 from __future__ import annotations
-import logging, time
-from typing import Callable
+
+import logging
+import time
+from collections.abc import Callable
+
 import paho.mqtt.client as mqtt
 
 logger = logging.getLogger(__name__)
 
+
 class MQTTClient:
-    def __init__(self, host="localhost", port=1883, client_id="ha"):
-        self.host, self.port = host, port
-        self._c = mqtt.Client(client_id=client_id)
-        self._c.on_connect = self._on_connect
-        self._c.on_disconnect = self._on_disconnect
-        self._subs: list[tuple[str, Callable]] = []
+    def __init__(
+        self,
+        host: str = "localhost",
+        port: int = 1883,
+        client_id: str = "ha_client",
+    ) -> None:
+        self.host = host
+        self.port = port
+        self._client = mqtt.Client(client_id=client_id)
+        self._client.on_connect = self._on_connect
+        self._client.on_disconnect = self._on_disconnect
+        self._subscriptions: list[tuple[str, Callable]] = []
 
-    def _on_connect(self, c, u, f, rc):
+    def _on_connect(self, client, userdata, flags, rc):
         if rc == 0:
-            logger.info("MQTT connected %s:%s", self.host, self.port)
-            for t, _ in self._subs: c.subscribe(t)
+            logger.info("MQTT connected to %s:%s", self.host, self.port)
+            for topic, _ in self._subscriptions:
+                client.subscribe(topic)
         else:
-            logger.error("MQTT connect rc=%s", rc)
+            logger.error("MQTT connect failed rc=%s", rc)
 
-    def _on_disconnect(self, c, u, rc):
+    def _on_disconnect(self, client, userdata, rc):
         logger.warning("MQTT disconnected rc=%s", rc)
 
-    def subscribe(self, topic: str, cb: Callable):
-        def wrap(client, u, msg):
-            try: cb(msg.topic, msg.payload.decode())
-            except Exception as e: logger.exception("cb error %s: %s", msg.topic, e)
-        self._subs.append((topic, cb))
-        self._c.subscribe(topic)
-        self._c.message_callback_add(topic, wrap)
+    def subscribe(self, topic: str, callback: Callable) -> None:
+        def wrapper(client, userdata, msg):
+            try:
+                callback(msg.topic, msg.payload.decode("utf-8"))
+            except Exception as e:
+                logger.exception("MQTT callback error on %s: %s", msg.topic, e)
 
-    def publish(self, topic: str, payload: str, retain=False):
-        self._c.publish(topic, payload, retain=retain)
+        self._subscriptions.append((topic, callback))
+        self._client.subscribe(topic)
+        self._client.message_callback_add(topic, wrapper)
 
-    def connect(self):
+    def publish(self, topic: str, payload: str, retain: bool = False) -> None:
+        self._client.publish(topic, payload, retain=retain)
+
+    def connect(self) -> None:
         while True:
-            try: self._c.connect(self.host, self.port, 60); self._c.loop_start(); return
-            except Exception as e: logger.warning("MQTT retry: %s", e); time.sleep(5)
+            try:
+                self._client.connect(self.host, self.port, keepalive=60)
+                self._client.loop_start()
+                return
+            except Exception as e:
+                logger.warning("MQTT connect failed (%s), retry in 5s", e)
+                time.sleep(5)
 
-    def disconnect(self):
-        self._c.loop_stop(); self._c.disconnect()
+    def disconnect(self) -> None:
+        self._client.loop_stop()
+        self._client.disconnect()

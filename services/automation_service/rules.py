@@ -1,10 +1,10 @@
-"""Rule engine: reacts to MQTT events and produces TTS/action responses."""
+"""Rule engine: reacts to MQTT events, produces TTS/action responses."""
 from __future__ import annotations
 
 import json
 import logging
 import time
-from typing import Optional
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -14,129 +14,97 @@ class RuleEngine:
         self.mqtt = mqtt_client
         self.cfg = config
         self.reminders = config.get("reminders", {})
-
-        self._persons: list[str] = []
+        self._persons_present: list[str] = []
         self._greeting_cooldowns: dict[str, float] = {}
         self._dish_status: dict[str, float] = {}
-        self._greeting_cooldown_s = (
-            float(config.get("face", {}).get("greeting_cooldown_minutes", 60)) * 60
-        )
-
-    # ── Helpers ──────────────────────────────────────────────────────────────
+        self._greeting_cooldown_s = float(
+            config.get("face", {}).get("greeting_cooldown_minutes", 60)
+        ) * 60
 
     def _speak(self, text: str) -> None:
         self.mqtt.publish("ha/tts/speak", json.dumps({"text": text}))
 
-    def _primary(self) -> Optional[str]:
-        return self._persons[0] if self._persons else None
-
-    def _fmt(self, template: str, **kwargs) -> str:
+    def _fmt(self, key: str, fallback: str, **kwargs) -> str:
         try:
-            return template.format(**kwargs)
+            return self.reminders.get(key, fallback).format(**kwargs)
         except KeyError:
-            return template
-
-    # ── Event handlers ────────────────────────────────────────────────────────
+            return self.reminders.get(key, fallback)
 
     def on_face_detected(self, topic: str, payload: str) -> None:
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
             return
-
         name = data.get("name", "unknown")
         confidence = float(data.get("confidence", 0))
-
         if name == "unknown" or confidence < 0.55:
             return
-
         last = self._greeting_cooldowns.get(name, 0.0)
         if time.monotonic() - last > self._greeting_cooldown_s:
             self._greeting_cooldowns[name] = time.monotonic()
-            text = self._fmt(
-                self.reminders.get("greeting_named", "Hei {name}!"),
-                name=name,
-            )
-            self._speak(text)
+            self._speak(self._fmt("greeting_named", "Hei {name}!", name=name))
             logger.info("Greeted: %s", name)
 
     def on_presence_update(self, topic: str, payload: str) -> None:
         try:
-            self._persons = json.loads(payload)
+            self._persons_present = json.loads(payload)
         except json.JSONDecodeError:
-            self._persons = []
+            self._persons_present = []
 
     def on_dish_alert(self, topic: str, payload: str) -> None:
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
             return
-
-        items = data.get("items", [])
         minutes = data.get("minutes", 0)
-        person = self._primary()
-
+        person = self._persons_present[0] if self._persons_present else None
         if person:
             text = self._fmt(
-                self.reminders.get(
-                    "dishes_named",
-                    "Hei {name}, astioita pöydällä {minutes} min.",
-                ),
+                "dishes_named",
+                "Hei {name}, tiskipöydällä on ollut astioita jo {minutes} minuuttia.",
                 name=person,
                 minutes=int(minutes),
             )
         else:
             text = self._fmt(
-                self.reminders.get(
-                    "dishes_unknown",
-                    "Astioita pöydällä {minutes} min.",
-                ),
+                "dishes_unknown",
+                "Tiskipöydällä on ollut astioita jo {minutes} minuuttia.",
                 minutes=int(minutes),
             )
         self._speak(text)
-        logger.info("Dish reminder sent: %s", items)
+        logger.info("Dish reminder sent, minutes=%.1f", minutes)
 
     def on_voice_command(self, topic: str, payload: str) -> None:
         try:
-            data = json.loads(payload)
-            text = data.get("text", "").lower().strip()
+            text = json.loads(payload).get("text", "").lower().strip()
         except json.JSONDecodeError:
             return
-
-        logger.info("Command received: %s", text)
+        logger.info("Command: %s", text)
 
         if any(w in text for w in ["valot päälle", "laita valot"]):
-            self._speak(self.reminders.get("lights_on", "Laitan valot päälle."))
+            self._speak(self._fmt("lights_on", "Laitan valot päälle."))
             self.mqtt.publish("ha/light/control", json.dumps({"action": "on"}))
 
         elif any(w in text for w in ["sammuta valot", "valot pois"]):
-            self._speak(self.reminders.get("lights_off", "Sammutin valot."))
+            self._speak(self._fmt("lights_off", "Sammutin valot."))
             self.mqtt.publish("ha/light/control", json.dumps({"action": "off"}))
 
         elif any(w in text for w in ["tiskipöydällä", "astioita", "tiskit"]):
             if self._dish_status:
-                items_fi = ", ".join(self._dish_status.keys())
-                resp = self._fmt(
-                    self.reminders.get("dishes_query_response", "Näen: {items}."),
-                    items=items_fi,
-                )
+                items = ", ".join(self._dish_status.keys())
+                self._speak(self._fmt("dishes_query_response", "Näen: {items}.", items=items))
             else:
-                resp = "Tiskipöytä näyttää tyhjältä."
-            self._speak(resp)
+                self._speak("Tiskipöytä näyttää tyhjältä.")
 
         elif any(w in text for w in ["ketä", "kuka", "paikalla"]):
-            if self._persons:
-                names = ", ".join(self._persons)
-                resp = self._fmt(
-                    self.reminders.get("present_response", "Paikalla on: {names}."),
-                    names=names,
-                )
+            if self._persons_present:
+                names = ", ".join(self._persons_present)
+                self._speak(self._fmt("present_response", "Paikalla on: {names}.", names=names))
             else:
-                resp = self.reminders.get("present_empty", "Ketään ei näy.")
-            self._speak(resp)
+                self._speak(self._fmt("present_empty", "Ketään ei näy."))
 
         else:
-            self._speak(self.reminders.get("unknown_command", "En ymmärtänyt komentoa."))
+            self._speak(self._fmt("unknown_command", "En ymmärtänyt komentoa."))
 
     def on_dish_status(self, topic: str, payload: str) -> None:
         try:

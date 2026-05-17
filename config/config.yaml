@@ -1,33 +1,13 @@
 face:
-  confidence_threshold: 0.55
   greeting_cooldown_minutes: 60
-  detection_interval_seconds: 3.0
-
-vision:
-  model_path: /app/shared/models/yolov8n.pt
-  tracked_classes: [cup, bowl, plate, fork, knife, spoon, bottle, wine glass]
-  roi: [0.1, 0.2, 0.9, 0.8]
-  timeout_minutes: 15
-  cooldown_minutes: 30
-  detection_confidence: 0.45
-
-voice:
-  whisper_model: small
-  language: fi
-  listen_mode: always
-
-schedule:
-  quiet_hours_start: 22
-  quiet_hours_end: 7
 
 reminders:
-  greeting_named: "Hei {name}, tervetuloa kotiin!"
-  dishes_named: "Hei {name}, tiskipöydällä on ollut astioita jo {minutes} minuuttia. Laitetaanko ne koneeseen?"
-  dishes_unknown: "Tiskipöydällä on ollut astioita jo {minutes} minuuttia."
+  greeting_named: "Hei {name}, mukava nähdä!"
+  dishes_named: "Hei {name}, tiskipöydällä on ollut astioita jo {minutes} minuuttia. Laitettaisiinko koneeseen?"
+  dishes_unknown: "Hei! Tiskipöydällä on ollut astioita jo {minutes} minuuttia."
   dishes_query_response: "Tiskipöydällä näen: {items}."
-  dishes_empty: "Tiskipöytä näyttää tyhjältä."
-  present_response: "Kotona on: {names}."
-  present_empty: "Ketään ei näy."
+  present_response: "Paikalla on: {names}."
+  present_empty: "Ketään ei näy kamerassa."
   lights_on: "Laitan valot päälle."
   lights_off: "Sammutin valot."
-  unknown_command: "En ymmärtänyt komentoa."
+  unknown_command: "En ymmärtänyt komentoa. Voit kysyä esimerkiksi: laita valot päälle, tai ketä paikalla on."

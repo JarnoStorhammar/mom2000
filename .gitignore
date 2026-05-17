@@ -1,7 +1,7 @@
 .env
+shared/embeddings/embeddings.pkl
 shared/models/*.pt
 shared/models/piper/
-shared/embeddings/embeddings.pkl
 __pycache__/
 *.pyc
 .DS_Store

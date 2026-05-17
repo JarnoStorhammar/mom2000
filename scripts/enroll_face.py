@@ -1,73 +1,172 @@
 """
-Face enrollment.
-  python scripts/enroll_face.py --name "Jarno" --webcam [--count 10]
-  python scripts/enroll_face.py --name "Jarno" --images /path/to/photos/
-  python scripts/enroll_face.py --list
+Face enrollment script.
+
+Usage:
+  python enroll_face.py --name "Jarno" --webcam [--count 10]
+  python enroll_face.py --name "Jarno" --images /path/to/photos/
+  python enroll_face.py --list
+  python enroll_face.py --remove "Jarno"
 """
 from __future__ import annotations
-import argparse, logging, pickle
+
+import argparse
+import logging
+import pickle
 from pathlib import Path
-from typing import Optional
-import cv2, face_recognition, numpy as np
+
+import cv2
+import face_recognition
+import numpy as np
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-logger=logging.getLogger("enroll")
-EMB=Path("shared/embeddings/embeddings.pkl")
+logger = logging.getLogger("enroll")
 
-def load():
-    if EMB.exists():
-        with open(EMB,"rb") as f: d=pickle.load(f)
-        return d.get("encodings",[]),d.get("names",[])
-    return [],[]
+EMBEDDINGS_DIR = Path("shared/embeddings")
+EMBEDDINGS_FILE = EMBEDDINGS_DIR / "embeddings.pkl"
 
-def save(e,n):
-    EMB.parent.mkdir(parents=True,exist_ok=True)
-    with open(EMB,"wb") as f: pickle.dump({"encodings":e,"names":n},f)
-    logger.info("Saved %d embeddings",len(n))
 
-def from_dir(name,d):
-    e,n=load(); c=0
-    for p in Path(d).glob("*"):
-        if p.suffix.lower() not in{".jpg",".jpeg",".png",".bmp"}: continue
-        img=face_recognition.load_image_file(str(p))
-        locs=face_recognition.face_locations(img)
-        if not locs: logger.warning("No face: %s",p.name); continue
-        enc=face_recognition.face_encodings(img,locs[:1])
-        if enc: e.append(enc[0]); n.append(name); c+=1; logger.info("Enrolled %s",p.name)
-    if c: save(e,n)
-    return c
+def _load() -> tuple[list, list]:
+    if EMBEDDINGS_FILE.exists():
+        with open(EMBEDDINGS_FILE, "rb") as f:
+            data = pickle.load(f)
+        return data.get("encodings", []), data.get("names", [])
+    return [], []
 
-def from_webcam(name,count=10):
-    cap=cv2.VideoCapture(0)
-    if not cap.isOpened(): logger.error("No webcam"); return 0
-    e,n=load(); c=0; logger.info("SPACE=capture  Q=quit  target=%d",count)
-    while c<count:
-        ret,frame=cap.read()
-        if not ret: continue
-        d=frame.copy()
-        cv2.putText(d,f"{c}/{count} SPACE=capture Q=quit",(10,30),cv2.FONT_HERSHEY_SIMPLEX,.7,(0,255,0),2)
-        cv2.imshow("Enroll",d); key=cv2.waitKey(1)&0xFF
-        if key==ord("q"): break
-        if key==ord(" "):
-            rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-            locs=face_recognition.face_locations(rgb)
-            if not locs: logger.warning("No face"); continue
-            enc=face_recognition.face_encodings(rgb,locs)
-            if enc: e.append(enc[0]); n.append(name); c+=1; logger.info("Captured %d/%d",c,count)
-    cap.release(); cv2.destroyAllWindows()
-    if c: save(e,n)
-    return c
 
-def main():
-    p=argparse.ArgumentParser()
-    p.add_argument("--name"); p.add_argument("--images"); p.add_argument("--webcam",action="store_true")
-    p.add_argument("--count",type=int,default=10); p.add_argument("--list",action="store_true")
-    a=p.parse_args()
-    if a.list:
-        _,n=load(); print("Enrolled:",", ".join(sorted(set(n))) or "none"); return
-    if not a.name: p.error("--name required")
-    if a.images: print(f"Enrolled {from_dir(a.name,a.images)} for '{a.name}'")
-    elif a.webcam: print(f"Enrolled {from_webcam(a.name,a.count)} for '{a.name}'")
-    else: p.error("--images or --webcam required")
+def _save(encodings: list, names: list) -> None:
+    EMBEDDINGS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(EMBEDDINGS_FILE, "wb") as f:
+        pickle.dump({"encodings": encodings, "names": names}, f)
+    logger.info("Saved %d embeddings → %s", len(names), EMBEDDINGS_FILE)
 
-if __name__=="__main__": main()
+
+def _encode(path: Path) -> np.ndarray | None:
+    img = face_recognition.load_image_file(str(path))
+    locs = face_recognition.face_locations(img)
+    if not locs:
+        logger.warning("No face in %s – skipped", path.name)
+        return None
+    encs = face_recognition.face_encodings(img, locs[:1])
+    return encs[0] if encs else None
+
+
+def enroll_from_images(name: str, image_dir: str) -> int:
+    encodings, names = _load()
+    count = 0
+    for p in sorted(Path(image_dir).iterdir()):
+        if p.suffix.lower() not in {".jpg", ".jpeg", ".png", ".bmp"}:
+            continue
+        enc = _encode(p)
+        if enc is not None:
+            encodings.append(enc)
+            names.append(name)
+            count += 1
+            logger.info("  ✓ %s", p.name)
+    if count:
+        _save(encodings, names)
+    return count
+
+
+def enroll_from_webcam(name: str, num_photos: int = 10) -> int:
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        logger.error("Cannot open webcam")
+        return 0
+    encodings, names = _load()
+    count = 0
+    logger.info("Press SPACE to capture (%d needed), Q to quit", num_photos)
+
+    while count < num_photos:
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        overlay = frame.copy()
+        status = f"Captured {count}/{num_photos}  |  SPACE = snap  Q = quit"
+        cv2.putText(overlay, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (50, 255, 80), 2)
+
+        # Draw face boxes live
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        locs = face_recognition.face_locations(rgb)
+        for top, right, bottom, left in locs:
+            cv2.rectangle(overlay, (left, top), (right, bottom), (50, 255, 80), 2)
+
+        cv2.imshow("Face Enrollment – " + name, overlay)
+        key = cv2.waitKey(1) & 0xFF
+
+        if key == ord("q"):
+            break
+        if key == ord(" "):
+            if not locs:
+                logger.warning("No face detected – try again")
+                continue
+            encs = face_recognition.face_encodings(rgb, locs[:1])
+            if encs:
+                encodings.append(encs[0])
+                names.append(name)
+                count += 1
+                logger.info("  Snap %d/%d", count, num_photos)
+
+    cap.release()
+    cv2.destroyAllWindows()
+    if count:
+        _save(encodings, names)
+    return count
+
+
+def list_enrolled() -> None:
+    _, names = _load()
+    from collections import Counter
+    counts = Counter(names)
+    if not counts:
+        print("No enrolled persons.")
+        return
+    print(f"Enrolled persons ({len(counts)}):")
+    for person, n in sorted(counts.items()):
+        print(f"  {person}: {n} samples")
+
+
+def remove_person(name: str) -> None:
+    encodings, names = _load()
+    before = len(names)
+    filtered = [(e, n) for e, n in zip(encodings, names) if n != name]
+    if not filtered:
+        encodings, names = [], []
+    else:
+        encodings, names = zip(*filtered)
+        encodings, names = list(encodings), list(names)
+    removed = before - len(names)
+    _save(encodings, names)
+    logger.info("Removed %d samples for '%s'", removed, name)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Enroll/manage face embeddings")
+    parser.add_argument("--name", help="Person name")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--images", metavar="DIR", help="Directory with face images")
+    group.add_argument("--webcam", action="store_true", help="Interactive webcam capture")
+    group.add_argument("--list", action="store_true", help="List enrolled persons")
+    group.add_argument("--remove", metavar="NAME", help="Remove person")
+    parser.add_argument("--count", type=int, default=10, help="Webcam: photos to capture")
+    args = parser.parse_args()
+
+    if args.list:
+        list_enrolled()
+    elif args.remove:
+        remove_person(args.remove)
+    elif args.images:
+        if not args.name:
+            parser.error("--name required with --images")
+        n = enroll_from_images(args.name, args.images)
+        print(f"Enrolled {n} images for '{args.name}'")
+    elif args.webcam:
+        if not args.name:
+            parser.error("--name required with --webcam")
+        n = enroll_from_webcam(args.name, args.count)
+        print(f"Enrolled {n} webcam captures for '{args.name}'")
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

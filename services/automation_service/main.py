@@ -1,4 +1,4 @@
-"""Automation service: subscribes to all events and runs rule engine."""
+"""Automation service: subscribes to all MQTT events and runs rule engine."""
 from __future__ import annotations
 
 import logging
@@ -8,36 +8,33 @@ import threading
 
 import yaml
 
-sys.path.insert(0, "/app/shared")
+sys.path.insert(0, "/app")
 
 from rules import RuleEngine
-from utils.mqtt_client import MQTTClient
+from shared.utils.mqtt_client import MQTTClient
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(name)s %(levelname)s %(message)s",
-)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("automation_service")
-
-MQTT_HOST = os.getenv("MQTT_HOST", "mqtt")
-MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-CONFIG_PATH = os.getenv("CONFIG_PATH", "/app/config/config.yaml")
 
 
 def load_config() -> dict:
+    path = os.getenv("CONFIG_PATH", "/app/config/config.yaml")
     try:
-        with open(CONFIG_PATH) as f:
+        with open(path) as f:
             return yaml.safe_load(f) or {}
     except FileNotFoundError:
-        logger.warning("Config not found at %s, using defaults", CONFIG_PATH)
+        logger.warning("Config not found at %s, using defaults", path)
         return {}
 
 
 def main() -> None:
     config = load_config()
-    mqtt = MQTTClient(host=MQTT_HOST, port=MQTT_PORT, client_id="automation_service")
+    mqtt = MQTTClient(
+        host=os.getenv("MQTT_HOST", "mqtt"),
+        port=int(os.getenv("MQTT_PORT", "1883")),
+        client_id="automation_service",
+    )
     mqtt.connect()
-
     engine = RuleEngine(mqtt_client=mqtt, config=config)
 
     mqtt.subscribe("ha/face/detected", engine.on_face_detected)

@@ -12,7 +12,8 @@ services:
       - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
       - mqtt_data:/mosquitto/data
       - mqtt_log:/mosquitto/log
-    networks: [ha_net]
+    networks:
+      - ha_net
 
   face_service:
     build:
@@ -23,11 +24,15 @@ services:
     env_file: .env
     volumes:
       - ./shared:/app/shared
+      - ./shared/embeddings:/app/embeddings
+      - ./shared/models:/app/models
       - ./config:/app/config
     devices:
       - /dev/video0:/dev/video0
-    depends_on: [mqtt]
-    networks: [ha_net]
+    depends_on:
+      - mqtt
+    networks:
+      - ha_net
 
   vision_service:
     build:
@@ -38,9 +43,12 @@ services:
     env_file: .env
     volumes:
       - ./shared:/app/shared
+      - ./shared/models:/app/models
       - ./config:/app/config
-    depends_on: [mqtt]
-    networks: [ha_net]
+    depends_on:
+      - mqtt
+    networks:
+      - ha_net
 
   voice_service:
     build:
@@ -53,10 +61,12 @@ services:
     volumes:
       - /run/user/1000/pulse:/run/user/1000/pulse
       - ./shared:/app/shared
+      - ./shared/models:/app/models
       - ./config:/app/config
     devices:
       - /dev/snd:/dev/snd
-    group_add: [audio]
+    group_add:
+      - audio
 
   automation_service:
     build:
@@ -67,9 +77,12 @@ services:
     env_file: .env
     volumes:
       - ./shared:/app/shared
+      - ./shared/embeddings:/app/embeddings
       - ./config:/app/config
-    depends_on: [mqtt]
-    networks: [ha_net]
+    depends_on:
+      - mqtt
+    networks:
+      - ha_net
 
   web_ui:
     build:
@@ -77,12 +90,16 @@ services:
       dockerfile: services/web_ui/Dockerfile
     container_name: ha_webui
     restart: unless-stopped
-    ports: ["8080:8080"]
+    ports:
+      - "8080:8080"
     env_file: .env
     volumes:
+      - ./shared:/app/shared
       - ./config:/app/config
-    depends_on: [mqtt]
-    networks: [ha_net]
+    depends_on:
+      - mqtt
+    networks:
+      - ha_net
 
 volumes:
   mqtt_data:
