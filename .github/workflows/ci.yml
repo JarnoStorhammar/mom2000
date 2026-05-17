@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── Lint ────────────────────────────────────────────────────────────────────
+  # --------------------------------------------------------------------------
   lint:
     name: Lint (ruff)
     runs-on: ubuntu-22.04
@@ -32,7 +32,7 @@ jobs:
       - name: Run ruff
         run: ruff check services/ shared/ tests/ --output-format=github
 
-  # ── Unit tests ──────────────────────────────────────────────────────────────
+  # --------------------------------------------------------------------------
   test:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-22.04
@@ -63,49 +63,24 @@ jobs:
         run: |
           pip install             opencv-python-headless             sounddevice             pyyaml             fastapi             uvicorn
 
-      - name: Create ML library stubs if missing
+      - name: Write face_recognition stub
         run: |
-          python - <<'PY'
-          import importlib.util, sys, types
+          SITE=$(python -c "import site; print(site.getsitepackages()[0])")
+          cat > "$SITE/face_recognition.py" << 'EOF'
+          def face_locations(*a, **kw): return []
+          def face_encodings(*a, **kw): return []
+          def face_distance(*a, **kw): return [1.0]
+          def load_image_file(p): return None
+          EOF
 
-          if importlib.util.find_spec("face_recognition") is None:
-              fr = types.ModuleType("face_recognition")
-              fr.face_locations  = lambda *a, **kw: []
-              fr.face_encodings  = lambda *a, **kw: []
-              fr.face_distance   = lambda *a, **kw: [1.0]
-              fr.load_image_file = lambda p: None
-              sys.modules["face_recognition"] = fr
-              # Persist stub as a real importable module for subprocesses
-              import pathlib
-              stub_dir = pathlib.Path(sys.prefix) / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-              stub_dir.mkdir(parents=True, exist_ok=True)
-              stub_file = stub_dir / "face_recognition.py"
-              stub_file.write_text(
-                  "def face_locations(*a, **kw): return []
-"
-                  "def face_encodings(*a, **kw): return []
-"
-                  "def face_distance(*a, **kw): return [1.0]
-"
-                  "def load_image_file(p): return None
-"
-              )
-              print("face_recognition stub written")
-
-          if importlib.util.find_spec("ultralytics") is None:
-              stub_dir = pathlib.Path(sys.prefix) / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-              stub_dir.mkdir(parents=True, exist_ok=True)
-              stub_file = stub_dir / "ultralytics.py"
-              stub_file.write_text(
-                  "class YOLO:
-"
-                  "    def __init__(self, *a, **kw): pass
-"
-                  "    def __call__(self, *a, **kw): return []
-"
-              )
-              print("ultralytics stub written")
-          PY
+      - name: Write ultralytics stub
+        run: |
+          SITE=$(python -c "import site; print(site.getsitepackages()[0])")
+          cat > "$SITE/ultralytics.py" << 'EOF'
+          class YOLO:
+              def __init__(self, *a, **kw): pass
+              def __call__(self, *a, **kw): return []
+          EOF
 
       - name: Run pytest
         env:
@@ -127,7 +102,7 @@ jobs:
           name: coverage-${{ matrix.python-version }}
           path: coverage.xml
 
-  # ── Docker build smoke test ─────────────────────────────────────────────────
+  # --------------------------------------------------------------------------
   docker-build:
     name: Docker build – ${{ matrix.service }}
     runs-on: ubuntu-22.04
